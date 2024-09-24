@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <stdint.h>
 
 // define static as it vary depends on local/global variable or function
 
@@ -6,51 +7,105 @@
 #define local_persist static
 #define global_variable static
 
+typdef int8_t int8;
+typdef int16_t int16;
+typdef int32_t int32;
+typdef int64_t int64;
+
+typdef uint8_t uint8;
+typdef uint16_t uint16;
+typdef uint32_t uint32;
+typdef uint64_t uint64;
+
+// TODO(molivera): This is a global just for now.
 global_variable bool Running;
 
 global_variable BITMAPINFO BitmapInfo;
 global_variable void *BitmapMemory;
-global_variable HBITMAP BitmapHandle;
-global_variable HDC BitmapDeviceContext;
+global_variable int BitmapWidth;
+global_variable int BitmapHeight;
+global_variable int BytesPerPixel = 4;
+
+internal void RenderWeirdGradient(int XOffset, int YOffset) {
+	int Width = BitmapWidth;
+	int Height = BitmapHeight;
+
+	int Pitch = Width*BytesPerPixel;
+	uint8 *Row = (uint8 *)BitmapMemory;
+	for(int y = 0; y < BitmapHeight; ++y) {
+		uint32 *Pixel = (uint32 *)Row;
+		for(int x = 0; x < BitmapWidth; ++x) {
+			/*
+				NOTE(molivera): This is a little endian architecture
+
+				but people at Microsoft wanted that the memory look like
+				0xppRRGGBB
+				(pp = Padding, RR = Red, GG = Green, BB = Blue)
+
+				As it is little endian, in memory is:
+
+				Pixel in memory = BB GG RR pp
+			*/
+
+			// Blue
+			*Pixel = (unit8)(X + XOffset);
+			++Pixel;
+
+			// Green
+			*Pixel = (unit8)(Y + YOffset);
+			++Pixel;
+
+			// Red
+			*Pixel = 0;
+			++Pixel;
+
+			// Padding
+			*Pixel = 0;
+			++Pixel;
+		}
+		Row += Pitch;
+	}
+}
 
 internal void Win32ResizeDIBSection(int Width, int Height) {
 	// TODO(molivera): Bullerproof this.
 	// Free after, then free first if that fails?
 
-	if(BitmapHandle) {
-		DeleteObject(BitmapHandle);
+	if(BitmapMemory) {
+		VirtualFree(BitmapMemory, 0, MEM_RELEASE);
 	}
 
-	if(!BitmapDeviceContext) {
-		// TODO(molivera): Should we recreate these under certain special circumstances
-		BitmapDeviceContext= CreateCompatibleDC(0);
-	}
+	BitmapWidth = Width;
+	BitmapHeight = Height;
 
 	BitmapInfo.bmiHeader.biSize = sizeof(BitmapInfo.bmiHeader);
-	BitmapInfo.bmiHeader.biWidth = Width;
-	BitmapInfo.bmiHeader.biHeight = Height;
+	BitmapInfo.bmiHeader.biWidth = BitmapWidth;
+	BitmapInfo.bmiHeader.biHeight = -BitmapHeight;
 	BitmapInfo.bmiHeader.biPlanes = 1;
 	BitmapInfo.bmiHeader.biBitCount = 32;
 	BitmapInfo.bmiHeader.biCompression = BI_RGB;
 
-	HBITMAP BitmapHandle = CreateDIBSection(
-		DeviceContext, &BitmapInfo,
-		DIB_RGB_COLORS,
-		&BitmapMemory,
-		0, 0);
+	// NOTE(casey): thanks to Chris Hecker
+	int BitmapMemorySize = (Width * Height) * BytesPerPixel;
+	BitmapMemory = VirtualAlloc(0, BitmapMemory, MEM_COMMIT, PAGE_READWRITE);
+
+	RenderWeirdGradient(0, 0);
 }
 
 internal void Win32UpdateWindow(
-	HDC DeviceContext, int X, int Y, int Width, int Height
+	HDC DeviceContext, RECT *WindowRect, int X, int Y, int Width, int Height
 ) {
+	int WindowWidth = WindowRect->right - WindowRect->left;
+	int WindowHeight = WindowRect->bottom - WindowRect->top;
+
 	StretchDIBits(
-			DeviceContext,
-			X, Y, Width, Height,
-			X, Y, Width, Height,
-			BitmapMemory,
-			&BitmapInfo,
-			DIB_RGB_COLORS,
-			SRCCOPY
+		DeviceContext,
+		0, 0, BitmapWidth, BitmapHeight,
+		0, 0, WindowWidth, WindowHeight,
+		BitmapMemory,
+		&BitmapInfo,
+		DIB_RGB_COLORS,
+		SRCCOPY
 	);
 }
 
@@ -87,7 +142,7 @@ LRESULT CALLBACK Win32MainWindowCallback(
 			OutputDebugStringA("WM_ACTIVATEAPP\n");
 		} break;
 
-		case WM_PAIN:
+		case WM_PAINT:
 		{
 			PAINSTRUCT Paint;
 			HDC DeviceContext = BeginPain(Window, &Paint);
@@ -96,7 +151,10 @@ LRESULT CALLBACK Win32MainWindowCallback(
 			int Width = Paint.rcPaint.right - Paint.rcPaint.left;
 			int Height = Paint.rcPaint.bottom - Paint.rcPaint.top;
 
-			Win32UpdateWindow(DeviceContext, X, Y, Width, Height);
+			RECT ClientRect;
+			GetClientRect(Window, &ClientRect);
+
+			Win32UpdateWindow(DeviceContext, &ClientRect, X, Y, Width, Height);
 			EndPaint(Window, &Paint);
 		} break;
 
@@ -135,13 +193,14 @@ int CALLBACK WinMain(
 
 			while(Running){
 				MSG Message;
-				BOOL MessageResult = GetMessageA(&Message, 0, 0, 0);
 
-				if(MessageResult > 0) {
+				while(PeekMessage(&Message, 0, 0, 0, PM_REMOVE)){
+					if(Message.message == WM_QUIT) {
+						Running = false;
+					}
+
 					TranslateMessage(&Message);
 					DispatchMessage(&Message);
-				} else {
-					break;
 				}
 			}
 		} else {
