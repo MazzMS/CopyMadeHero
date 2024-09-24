@@ -1,2 +1,5 @@
 # Visual Studio files
 .vs/
+
+# Build
+build/*
