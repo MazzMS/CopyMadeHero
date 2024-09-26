@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <math.h>
 #include <GameInput.h>
+#include <xaudio2.h>
 
 // define static as it vary depends on local/global variable or function
 
@@ -69,6 +70,84 @@ RenderWeirdGradient(
 		*Pixel++ = ((Green << 8) | Blue);
 		}
 		Row += Buffer->Pitch;
+	}
+}
+
+internal void
+Win32InitAudio(uint32_t SamplesPerSec) {
+	if (FAILED(::CoInitializeEx(nullptr, COINIT_MULTITHREADED))) {
+		// TODO(molivera): Diagnostic
+		return;
+	}
+
+	IXAudio2 *XAudio2{};
+	if (FAILED(::XAudio2Create(&XAudio2, 0, XAUDIO2_DEFAULT_PROCESSOR))) {
+		// TODO(molivera): Diagnostic
+		return;
+	}
+
+	IXAudio2MasteringVoice* MasteringVoice{};
+	if (FAILED(XAudio2->CreateMasteringVoice(&MasteringVoice))) {
+		// TODO(molivera): Diagnostic
+		return;
+	}
+
+	// NOTE(molivera): Audio constants
+	double Volume = 0.01;
+
+	WORD BitsPerSample = 16;
+	DWORD BufferSizeInCycles = 10;
+	double CyclesPerSec = 261.5;
+	double PI = 3.14159265358979323846;
+
+	DWORD SamplesPerCycle = (DWORD)(SamplesPerSec / CyclesPerSec);
+	DWORD BufferSizeInSamples = SamplesPerCycle * BufferSizeInCycles;
+
+	BYTE RawBuffer[4000]; //BufferSize
+
+	// Format
+	WAVEFORMATEX WaveFormat{};
+    WaveFormat.wFormatTag = WAVE_FORMAT_PCM;
+    WaveFormat.nChannels = 2; // Stereo
+    WaveFormat.nSamplesPerSec = SamplesPerSec;
+	WaveFormat.nBlockAlign = (WaveFormat.nChannels * BitsPerSample) / 8;
+    WaveFormat.nAvgBytesPerSec = WaveFormat.nSamplesPerSec * WaveFormat.nBlockAlign;
+    WaveFormat.wBitsPerSample = BitsPerSample;
+    WaveFormat.cbSize = 0;
+
+	// Source Voice
+	IXAudio2SourceVoice* SourceVoice{};
+	if (FAILED(XAudio2->CreateSourceVoice(&SourceVoice, &WaveFormat))){
+		return;
+	}
+
+	// Fill buffer
+	double phase{};
+	uint32_t Index{};
+	while(Index < 4000){ //BufferSize
+		phase += (2 * PI) / SamplesPerSec;
+		int16_t sample = (int16_t)(sin(phase) * INT16_MAX * Volume);
+		RawBuffer[Index++] = (BYTE)sample;
+		RawBuffer[Index++] = (BYTE)sample;
+	}
+
+	XAUDIO2_BUFFER Buffer{};
+	Buffer.Flags = XAUDIO2_END_OF_STREAM;
+	Buffer.AudioBytes = 4000; // BufferSize
+	Buffer.pAudioData = RawBuffer;
+	Buffer.PlayBegin = 0;
+	Buffer.PlayLength = 0;
+	Buffer.LoopBegin = 0;
+	Buffer.LoopLength = 0;
+	Buffer.LoopCount = XAUDIO2_LOOP_INFINITE;
+
+	// Submit buffer and start voice
+	if (FAILED(SourceVoice->SubmitSourceBuffer(&Buffer))){
+		return;
+	}
+
+	if (FAILED(SourceVoice->Start(0))){
+		return;
 	}
 }
 
@@ -280,6 +359,8 @@ WinMain(
 //				}
 
 				RenderWeirdGradient(&GlobalBackbuffer, XOffset, YOffset);
+
+				Win32InitAudio(44100);
 
 				HDC DeviceContext = GetDC(Window);
 				win32_window_dimension Dimension = Win32GetWindowDimension(Window);
