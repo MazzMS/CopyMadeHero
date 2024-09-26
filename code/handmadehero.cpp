@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <stdint.h>
 #include <math.h>
+#include <GameInput.h>
 
 // define static as it vary depends on local/global variable or function
 
@@ -11,13 +12,16 @@
 // TODO(molivera): This is a global just for now.
 global_variable bool GlobalRunning;
 
+global_variable int XAdditional = 0;
+global_variable int YAdditional = 0;
+global_variable int radius = 100;
+
 struct win32_offscreen_buffer {
   BITMAPINFO Info;
   void *Memory;
   int Width;
   int Height;
   int Pitch;
-  int BytesPerPixel = 4;
 };
 
 struct win32_window_dimension {
@@ -41,12 +45,12 @@ Win32GetWindowDimension(HWND Window) {
 
 internal void
 RenderWeirdGradient(
-	win32_offscreen_buffer Buffer, int BlueOffset, int GreenOffset
+	win32_offscreen_buffer *Buffer, int BlueOffset, int GreenOffset
 ) {
-	uint8_t *Row = (uint8_t *)Buffer.Memory;
-	for (int y = 0; y < Buffer.Height; ++y) {
+	uint8_t *Row = (uint8_t *)Buffer->Memory;
+	for (int y = 0; y < Buffer->Height; ++y) {
 		uint32_t *Pixel = (uint32_t *)Row;
-		for (int x = 0; x < Buffer.Width; ++x) {
+		for (int x = 0; x < Buffer->Width; ++x) {
 			/*
 				NOTE(molivera): This is a little endian architecture
 
@@ -64,7 +68,7 @@ RenderWeirdGradient(
 
 		*Pixel++ = ((Green << 8) | Blue);
 		}
-		Row += Buffer.Pitch;
+		Row += Buffer->Pitch;
 	}
 }
 
@@ -81,7 +85,7 @@ Win32ResizeDIBSection(
 
 	Buffer->Width = Width;
 	Buffer->Height = Height;
-	Buffer->BytesPerPixel = 4;
+	int BytesPerPixel = 4;
 
 	// NOTE(casey): When the biHeight fieldi s negative, this is the clue to
 	// Windwos to treat this bitmap as top-down, not bottom-up, meaning that
@@ -96,25 +100,24 @@ Win32ResizeDIBSection(
 
 	// NOTE(casey): thanks to Chris Hecker
 	int BitmapMemorySize =
-		(Buffer->Width * Buffer->Height) * Buffer->BytesPerPixel;
+		(Buffer->Width * Buffer->Height) * BytesPerPixel;
 	Buffer->Memory =
 		VirtualAlloc(0, BitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
 
-	Buffer->Pitch = Width * Buffer->BytesPerPixel;
+	Buffer->Pitch = Width * BytesPerPixel;
 }
 
 internal void
 Win32DisplayBufferInWindow(
 	HDC DeviceContext, int WindowWidth, int WindowHeight,
-	win32_offscreen_buffer Buffer,
-	int X, int Y, int Width, int Height
+	win32_offscreen_buffer *Buffer
 ) {
 	// TODO(molivera): Fix aspect ratio
 	StretchDIBits(
 		DeviceContext,
 		0, 0, WindowWidth, WindowHeight,
-		0, 0, Buffer.Width, Buffer.Height,
-		Buffer.Memory, &Buffer.Info,
+		0, 0, Buffer->Width, Buffer->Height,
+		Buffer->Memory, &Buffer->Info,
         DIB_RGB_COLORS, SRCCOPY
 	);
 }
@@ -143,6 +146,36 @@ Win32MainWindowCallback(
 		OutputDebugStringA("WM_ACTIVATEAPP\n");
 	} break;
 
+	case WM_SYSKEYDOWN:
+	case WM_SYSKEYUP:
+	case WM_KEYDOWN:
+	case WM_KEYUP: {
+		uint32_t VKcode = WParam;
+		bool WasDown = ((LParam & (1 << 30)) == 0);
+		bool IsDown = ((LParam & (1 << 31)) != 0);
+
+		if(WasDown != IsDown) {
+			if(VKcode == 'W'){
+				YAdditional += 20;
+			}
+			if(VKcode == 'A'){
+				XAdditional += 20;
+			}
+			if(VKcode == 'S'){
+				YAdditional -= 20;
+			}
+			if(VKcode == 'D'){
+				XAdditional -= 20;
+			}
+			if(VKcode == 'D'){
+				XAdditional -= 20;
+			}
+			if(VKcode == VK_SPACE){
+				radius = (radius == 100) ? 0 : 100;
+			}
+		}
+	} break;
+
 	case WM_PAINT: {
 		PAINTSTRUCT Paint;
 		HDC DeviceContext = BeginPaint(Window, &Paint);
@@ -154,8 +187,7 @@ Win32MainWindowCallback(
 		win32_window_dimension Dimension = Win32GetWindowDimension(Window);
 		Win32DisplayBufferInWindow(
 				DeviceContext, Dimension.Width, Dimension.Height,
-				GlobalBackbuffer,
-				X, Y, Width, Height
+				&GlobalBackbuffer
 		);
 
 		EndPaint(Window, &Paint);
@@ -199,9 +231,11 @@ WinMain(
 
 			int XOffset = 0;
 			int YOffset = 0;
-			int radius = 100;
 			double angle_increment = 0.01;
 			double angle = 0;
+
+			// Controller
+			IGameInput *GameInput = nullptr;
 
 			while (GlobalRunning) {
 				MSG Message;
@@ -215,20 +249,49 @@ WinMain(
 					DispatchMessage(&Message);
 				}
 
-				RenderWeirdGradient(GlobalBackbuffer, XOffset, YOffset);
+				// Gamepad input
+//				IGameInputReading *reading;
+//				if (SUCCEEDED(GameInput->GetCurrentReading(
+//					GameInputKindGamepad,
+//					nullptr,
+//					&reading
+//				))) {
+//					GameInputGamepadState state;
+//					reading->GetGamepadState(&state);
+//
+//					bool Menu = state.buttons & GameInputGamepadMenu;
+//					bool A = state.buttons & GameInputGamepadA;
+//					bool B = state.buttons & GameInputGamepadB;
+//					bool X = state.buttons & GameInputGamepadX;
+//					bool Y = state.buttons & GameInputGamepadY;
+//					bool Up = state.buttons & GameInputGamepadDPadUp;
+//					bool Down = state.buttons & GameInputGamepadDPadDown;
+//					bool Left = state.buttons & GameInputGamepadDPadLeft;
+//					bool Rigth = state.buttons & GameInputGamepadDPadRight;
+//					bool LeftShoulder = state.buttons & GameInputGamepadLeftShoulder;
+//					bool RightShoulder = state.buttons & GameInputGamepadRightShoulder;
+//
+//					float LeftThumbstickX = state.leftThumbstickX;
+//					float LeftThumbstickY = state.leftThumbstickY;
+//					float RightThumbstickX = state.rightThumbstickX;
+//					float RightThumbstickY = state.rightThumbstickY;
+//
+//					reading->Release();
+//				}
+
+				RenderWeirdGradient(&GlobalBackbuffer, XOffset, YOffset);
 
 				HDC DeviceContext = GetDC(Window);
 				win32_window_dimension Dimension = Win32GetWindowDimension(Window);
 
 				Win32DisplayBufferInWindow(
 					DeviceContext, Dimension.Width, Dimension.Height,
-					GlobalBackbuffer,
-					0, 0, Dimension.Width, Dimension.Height
+					&GlobalBackbuffer
 				);
 				ReleaseDC(Window, DeviceContext);
 
-				XOffset = (radius * cos(angle));
-				YOffset = (radius * sin(angle));
+				XOffset = (radius * cos(angle)) + XAdditional;
+				YOffset = (radius * sin(angle)) + YAdditional;
 				angle += angle_increment;
 			}
 		} else {

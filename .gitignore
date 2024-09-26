@@ -1,5 +1,9 @@
 # Visual Studio files
 .vs/
+*.vcxproj*
+*.sln
+x64/
+CopyMadeHero/
 
 # Build
 build/
