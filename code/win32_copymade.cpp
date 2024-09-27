@@ -74,36 +74,45 @@ RenderWeirdGradient(
 }
 
 internal void
-Win32InitAudio(uint32_t SamplesPerSec) {
-	if (FAILED(::CoInitializeEx(nullptr, COINIT_MULTITHREADED))) {
+Win32InitAudio() {
+	// NOTE(molivera): Audio constants
+	WORD BitsPerSample = 16;		// 16 bits per sample.
+	DWORD SamplesPerSec = 44100;	// 44,100 samples per second.
+	double CyclesPerSec = 256.0;		// 220 cycles per second (frequency of the audible tone).
+	double Volume = 0.2;			// 50% volume.
+	WORD AudioBufferSizeInCycles = 10;	// 10 cycles per audio buffer.
+	double PI = 3.14159265358979323846;
+
+	// Calculated constants.
+	DWORD  SamplesPerCycle = (DWORD)(SamplesPerSec / CyclesPerSec);                // 200 samples per cycle.
+	DWORD  AudioBufferSizeInSamples = SamplesPerCycle * AudioBufferSizeInCycles;   // 2,000 samples per buffer.
+	uint32_t BufferSizeInBytes = AudioBufferSizeInSamples * BitsPerSample / 8; // 4,000 bytes per buffer.
+
+	BYTE *RawBuffer = new BYTE[BufferSizeInBytes];
+
+	HRESULT Res = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+	if (FAILED(Res)) {
 		// TODO(molivera): Diagnostic
+		delete[] RawBuffer;
 		return;
 	}
 
 	IXAudio2 *XAudio2{};
-	if (FAILED(::XAudio2Create(&XAudio2, 0, XAUDIO2_DEFAULT_PROCESSOR))) {
+	Res = XAudio2Create(&XAudio2, 0, XAUDIO2_DEFAULT_PROCESSOR);
+	if (FAILED(Res)) {
 		// TODO(molivera): Diagnostic
+		delete[] RawBuffer;
 		return;
 	}
 
 	IXAudio2MasteringVoice* MasteringVoice{};
-	if (FAILED(XAudio2->CreateMasteringVoice(&MasteringVoice))) {
+	Res = XAudio2->CreateMasteringVoice(&MasteringVoice);
+	if (FAILED(Res)) {
 		// TODO(molivera): Diagnostic
+		XAudio2->Release();
+		delete[] RawBuffer;
 		return;
 	}
-
-	// NOTE(molivera): Audio constants
-	double Volume = 0.01;
-
-	WORD BitsPerSample = 16;
-	DWORD BufferSizeInCycles = 10;
-	double CyclesPerSec = 261.5;
-	double PI = 3.14159265358979323846;
-
-	DWORD SamplesPerCycle = (DWORD)(SamplesPerSec / CyclesPerSec);
-	DWORD BufferSizeInSamples = SamplesPerCycle * BufferSizeInCycles;
-
-	BYTE RawBuffer[4000]; //BufferSize
 
 	// Format
 	WAVEFORMATEX WaveFormat{};
@@ -118,22 +127,36 @@ Win32InitAudio(uint32_t SamplesPerSec) {
 	// Source Voice
 	IXAudio2SourceVoice* SourceVoice{};
 	if (FAILED(XAudio2->CreateSourceVoice(&SourceVoice, &WaveFormat))){
+		XAudio2->Release();
+		delete[] RawBuffer;
 		return;
 	}
 
 	// Fill buffer
-	double phase{};
-	uint32_t Index{};
-	while(Index < 4000){ //BufferSize
-		phase += (2 * PI) / SamplesPerSec;
+	double phase = 0;
+	uint32_t Index = 0;
+
+	while(Index < AudioBufferSizeInSamples){
 		int16_t sample = (int16_t)(sin(phase) * INT16_MAX * Volume);
+
+		// Left Channel
 		RawBuffer[Index++] = (BYTE)sample;
+		RawBuffer[Index++] = (BYTE)(sample >> 8);
+
+		// Right Channel
 		RawBuffer[Index++] = (BYTE)sample;
+		RawBuffer[Index++] = (BYTE)(sample >> 8);
+
+		// Advance phase
+		phase += (2.0 * PI) / SamplesPerCycle;
+		if (phase >= (2.0 * PI)) {
+			phase -= (2.0 * PI); // Keep phase within 0 to 2π
+		}
 	}
 
 	XAUDIO2_BUFFER Buffer{};
 	Buffer.Flags = XAUDIO2_END_OF_STREAM;
-	Buffer.AudioBytes = 4000; // BufferSize
+	Buffer.AudioBytes = BufferSizeInBytes; // BufferSize
 	Buffer.pAudioData = RawBuffer;
 	Buffer.PlayBegin = 0;
 	Buffer.PlayLength = 0;
@@ -143,10 +166,14 @@ Win32InitAudio(uint32_t SamplesPerSec) {
 
 	// Submit buffer and start voice
 	if (FAILED(SourceVoice->SubmitSourceBuffer(&Buffer))){
+		XAudio2->Release();
+		delete[] RawBuffer;
 		return;
 	}
 
 	if (FAILED(SourceVoice->Start(0))){
+		XAudio2->Release();
+		delete[] RawBuffer;
 		return;
 	}
 }
@@ -316,6 +343,9 @@ WinMain(
 			// Controller
 			IGameInput *GameInput = nullptr;
 
+			//
+			Win32InitAudio();
+
 			while (GlobalRunning) {
 				MSG Message;
 
@@ -360,7 +390,6 @@ WinMain(
 
 				RenderWeirdGradient(&GlobalBackbuffer, XOffset, YOffset);
 
-				Win32InitAudio(44100);
 
 				HDC DeviceContext = GetDC(Window);
 				win32_window_dimension Dimension = Win32GetWindowDimension(Window);
